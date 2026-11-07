@@ -81,6 +81,7 @@ jobs:
             -DYUZU_USE_BUNDLED_SDL3=ON \
             -DYUZU_USE_BUNDLED_SIRIT=ON \
             -DYUZU_USE_BUNDLED_OPENSSL=OFF \
+            -DOPENSSL_TARGET_PLATFORM=ios64-xcrun \
             -DYUZU_USE_BUNDLED_MOLTENVK=ON \
             -DLICHII_BUILD_TAG=ios-${{ github.run_number }} \
             -DLICHII_BUILD_PLATFORM=ios-arm64
