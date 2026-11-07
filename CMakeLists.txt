@@ -546,7 +546,8 @@ if (IOS)
     # iOS has no Carbon/Cocoa/IOKit; SDL3, FFmpeg and MoltenVK pull in the rest of these.
     foreach(fw UIKit Metal QuartzCore CoreGraphics CoreVideo CoreMedia VideoToolbox Security
                UniformTypeIdentifiers Foundation CoreFoundation AVFoundation AudioToolbox CoreAudio
-               GameController CoreMotion CoreHaptics CoreBluetooth CoreText ImageIO IOSurface)
+               GameController CoreMotion CoreHaptics CoreBluetooth CoreText ImageIO IOSurface
+               OpenGLES CFNetwork)
         find_library(${fw}_LIBRARY ${fw} REQUIRED)
         list(APPEND PLATFORM_LIBRARIES ${${fw}_LIBRARY})
     endforeach()
