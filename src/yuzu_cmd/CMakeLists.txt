@@ -78,7 +78,7 @@ if (IOS)
         OUTPUT_NAME "Lichii"
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${PROJECT_SOURCE_DIR}/dist/ios/Info.plist.in"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "org.lichii.ios"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.solluxcaptor.lichii"
         MACOSX_BUNDLE_BUNDLE_NAME "Lichii"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
         MACOSX_BUNDLE_BUNDLE_VERSION "1"
