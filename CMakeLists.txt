@@ -551,6 +551,9 @@ if (IOS)
         list(APPEND PLATFORM_LIBRARIES ${${fw}_LIBRARY})
     endforeach()
     list(APPEND PLATFORM_LIBRARIES bz2 z iconv)
+    # The prebuilt SDL3 package links the macOS-only ForceFeedback framework; pre-seed its
+    # find_library result so the lookup is skipped (GameController covers rumble on iOS).
+    set(ForceFeedback_LIBRARY "${GameController_LIBRARY}" CACHE FILEPATH "no ForceFeedback framework on iOS" FORCE)
 elseif (APPLE)
     foreach(fw Carbon Metal Cocoa IOKit CoreVideo CoreMedia Security UniformTypeIdentifiers Foundation)
         find_library(${fw}_LIBRARY ${fw} REQUIRED)

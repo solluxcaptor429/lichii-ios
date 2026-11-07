@@ -294,7 +294,9 @@ endif()
 
 if (YUZU_CMD)
     add_subdirectory(yuzu_cmd)
-    set_target_properties(yuzu-cmd PROPERTIES OUTPUT_NAME "eden-cli")
+    if (NOT IOS) # the iOS app bundle keeps its own name (set in yuzu_cmd)
+        set_target_properties(yuzu-cmd PROPERTIES OUTPUT_NAME "eden-cli")
+    endif()
 endif()
 
 if (ENABLE_QT)
