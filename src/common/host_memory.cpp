@@ -28,7 +28,10 @@
 #include <sys/random.h>
 #elif defined(__APPLE__)
 #include <sys/types.h>
-#include <sys/random.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_IPHONE
+#include <sys/random.h> // not in the iOS SDK; unused here anyway
+#endif
 #include <mach/vm_map.h>
 #include <mach/mach.h>
 #elif defined(__FreeBSD__)

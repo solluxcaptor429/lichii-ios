@@ -434,6 +434,13 @@ set(BOOST_INCLUDE_LIBRARIES algorithm icl pool container heap asio headers proce
 
 AddJsonPackage(boost)
 
+if (IOS AND TARGET boost_process)
+    # Boost.Process v2's shell.cpp needs wordexp(), which the iOS SDK marks unavailable. Only the
+    # header-only v1 async_pipe is used (core/debugger), so drop that translation unit.
+    set_source_files_properties("${Boost_SOURCE_DIR}/libs/process/src/shell.cpp"
+        TARGET_DIRECTORY boost_process PROPERTIES HEADER_FILE_ONLY TRUE)
+endif()
+
 # really annoying thing where boost::headers doesn't work with cpm
 # TODO(crueter) investigate
 set(BOOST_NO_HEADERS ${Boost_ADDED})
