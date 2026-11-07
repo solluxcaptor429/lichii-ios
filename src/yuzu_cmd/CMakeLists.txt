@@ -72,6 +72,24 @@ endif()
 
 create_target_directory_groups(yuzu-cmd)
 
+if (IOS)
+    # The SDL frontend is the iOS app: Lichii.app with the MoltenVK framework embedded.
+    set_target_properties(yuzu-cmd PROPERTIES
+        OUTPUT_NAME "Lichii"
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${PROJECT_SOURCE_DIR}/dist/ios/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.lichii.ios"
+        MACOSX_BUNDLE_BUNDLE_NAME "Lichii"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+    add_custom_command(TARGET yuzu-cmd POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_DIR:yuzu-cmd>/Frameworks"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${MOLTENVK_FRAMEWORK_DIR}" "$<TARGET_BUNDLE_DIR:yuzu-cmd>/Frameworks/MoltenVK.framework"
+        COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/dist/ios/Lichii.entitlements" "$<TARGET_BUNDLE_DIR:yuzu-cmd>/../Lichii.entitlements"
+        COMMENT "Embedding MoltenVK.framework into Lichii.app")
+endif()
+
 # needed for vma
 if (NOT MSVC)
     target_compile_options(yuzu-cmd PRIVATE

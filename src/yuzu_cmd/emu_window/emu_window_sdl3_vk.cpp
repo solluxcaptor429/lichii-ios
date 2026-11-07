@@ -75,6 +75,11 @@ EmuWindow_SDL3_VK::EmuWindow_SDL3_VK(InputCommon::InputSubsystem* input_subsyste
         window_info.type = Core::Frontend::WindowSystemType::X11;
         window_info.display_connection = x11_display;
         window_info.render_surface = reinterpret_cast<void*>(static_cast<uintptr_t>(x11_window));
+    } else if (SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER,
+                                      nullptr) != nullptr) {
+        // iOS: SDL owns the UIWindow; render into a CAMetalLayer exactly as on macOS.
+        window_info.type = Core::Frontend::WindowSystemType::Cocoa;
+        window_info.render_surface = SDL_Metal_GetLayer(SDL_Metal_CreateView(render_window));
     } else if (SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
                                       nullptr) != nullptr) {
         window_info.type = Core::Frontend::WindowSystemType::Cocoa;

@@ -29,6 +29,7 @@
 #endif
 
 #ifdef __APPLE__
+#include <TargetConditionals.h>
 #include <sys/param.h> // Used in GetBundleDirectory()
 
 // CFURL contains __attribute__ directives that gcc does not know how to parse, so we need to just
@@ -129,6 +130,15 @@ public:
 #undef LEGACY_PATH
 #elif __ANDROID__
         ASSERT(!eden_path.empty());
+        eden_path_cache = eden_path / CACHE_DIR;
+        eden_path_config = eden_path / CONFIG_DIR;
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+        // iOS: keep data under Documents so the Files app can reach saves, logs and caches.
+        if (const char* home = std::getenv("HOME")) {
+            eden_path = fs::path{home} / "Documents" / EDEN_DIR;
+        } else {
+            eden_path = GetCurrentDir() / EDEN_DIR;
+        }
         eden_path_cache = eden_path / CACHE_DIR;
         eden_path_config = eden_path / CONFIG_DIR;
 #else

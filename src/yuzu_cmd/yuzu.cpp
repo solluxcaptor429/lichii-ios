@@ -67,6 +67,16 @@
 #include <sys/resource.h>
 #endif
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <vector>
+#endif
+
 #ifdef _WIN32
 // windows.h needs to be included before shellapi.h
 #include <windows.h>
@@ -545,6 +555,37 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         return EditNup(lp) ? SDL_APP_SUCCESS : SDL_APP_FAILURE;
     }
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    // iOS has no command line: run the first game in the app's Documents folder, which the user
+    // fills through the Files app (UIFileSharingEnabled in Info.plist).
+    if (lp.filepath.empty()) {
+        lp.fullscreen = true;
+        const char* home = std::getenv("HOME");
+        const std::filesystem::path documents = std::filesystem::path(home ? home : ".") / "Documents";
+        std::error_code ec;
+        std::filesystem::create_directories(documents, ec);
+        std::vector<std::filesystem::path> candidates;
+        for (const auto& entry : std::filesystem::directory_iterator(documents, ec)) {
+            if (!entry.is_regular_file(ec)) {
+                continue;
+            }
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == ".nup" || ext == ".nsp" || ext == ".xci" || ext == ".nca" || ext == ".nso" ||
+                ext == ".nro") {
+                candidates.push_back(entry.path());
+            }
+        }
+        std::sort(candidates.begin(), candidates.end());
+        if (!candidates.empty()) {
+            lp.filepath = candidates.front().string();
+            LOG_INFO(Frontend, "iOS: launching {}", lp.filepath);
+        } else {
+            LOG_CRITICAL(Frontend, "iOS: no game found in {}", documents.string());
+        }
+    }
+#endif
     if (lp.filepath.empty()) {
         LOG_CRITICAL(Frontend, "Failed to load ROM: No ROM specified");
         return SDL_APP_FAILURE;
