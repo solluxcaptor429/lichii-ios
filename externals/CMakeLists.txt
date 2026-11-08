@@ -442,15 +442,17 @@ if (APPLE)
     endif()
 
     if (IOS)
-        # The cpmfile entry points at the macOS archive; iOS needs the ios tar of the same release.
-        set(moltenvk_ios_dir "${CMAKE_BINARY_DIR}/externals/moltenvk-ios")
+        # Official MoltenVK for iOS. The Ryujinx fork (v1.4.1-ryujinx, used on macOS) carries a
+        # SPIRV-Cross that emits thread_scope_subgroup, which the iOS Metal compiler rejects;
+        # 1.4.2 emits thread_scope_simdgroup.
+        set(moltenvk_ios_dir "${CMAKE_BINARY_DIR}/externals/moltenvk-ios-1.4.2")
         set(moltenvk_ios_fw "${moltenvk_ios_dir}/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework")
         if (NOT EXISTS "${moltenvk_ios_fw}/MoltenVK")
             message(STATUS "Downloading MoltenVK for iOS")
             file(DOWNLOAD
-                "https://github.com/V380-Ori/Ryujinx.MoltenVK/releases/download/v1.4.1-ryujinx/MoltenVK-ios.tar"
+                "https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-ios.tar"
                 "${moltenvk_ios_dir}/MoltenVK-ios.tar"
-                EXPECTED_HASH SHA512=0ef8dfe27d660a2bc78d9a38ab395f8c54e3ba054aa190f3df7a8a1dad548fec53bae49a36908f78937c5b68614354e4d445dc1f7a033666e5b13db7e9407bbd
+                EXPECTED_HASH SHA512=eb98821ee08cf3e3429a93fb85f5aaeaa2de3ee2eb02a06fd1f8b09f9b31958f0d6b0d07162e1f44f19a2c846ba26bbbdb090fab6c97cc7ce7b7887e8c1d1086
                 STATUS moltenvk_ios_status)
             list(GET moltenvk_ios_status 0 moltenvk_ios_error)
             if (moltenvk_ios_error)

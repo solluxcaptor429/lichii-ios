@@ -612,6 +612,17 @@ public:
                              "vm_allocate of the {:#x} byte guest address space failed: {} (is the "
                              "extended-virtual-addressing entitlement present?)",
                              virtual_size, mach_error_string(kr));
+                // Diagnostic: the largest power-of-two reservation this process can still make.
+                for (size_t probe = size_t{1} << 38; probe >= (size_t{1} << 30); probe >>= 1) {
+                    vm_address_t probe_address = 0;
+                    if (vm_allocate(mach_task_self(), &probe_address, probe, VM_FLAGS_ANYWHERE) ==
+                        KERN_SUCCESS) {
+                        vm_deallocate(mach_task_self(), probe_address, probe);
+                        LOG_WARNING(HW_Memory, "iOS: largest reservable region is {:#x} bytes ({} GiB)",
+                                    probe, probe >> 30);
+                        break;
+                    }
+                }
                 return false;
             }
             vm_protect(mach_task_self(), virtual_address, virtual_size, FALSE, VM_PROT_NONE);
