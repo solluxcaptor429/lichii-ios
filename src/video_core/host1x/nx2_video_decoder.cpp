@@ -99,6 +99,10 @@ struct Nx2VideoDecoder::Impl {
     /// lose theirs and take the earliest one instead.
     std::multiset<u64> pending_pts;
     std::vector<u8> packet; ///< FFmpeg reads up to AV_INPUT_BUFFER_PADDING_SIZE past the data
+    /// Consecutive packets the decoder rejected. A stream it cannot decode is dropped after
+    /// kMaxFailures instead of being retried (and logged) for every frame; Reset() re-arms it.
+    u32 failures{};
+    static constexpr u32 kMaxFailures = 30;
 
     ~Impl() {
         sws_freeContext(scaler);
@@ -177,7 +181,15 @@ void Nx2VideoDecoder::Decode(std::span<const u8> data, u64 pts, std::vector<Nx2P
         impl->pending_pts.erase(impl->pending_pts.begin());
     }
     impl->pending_pts.insert(pts);
-    impl->context->SendPacket(packet);
+    if (impl->failures >= Impl::kMaxFailures) {
+        return;
+    }
+    if (impl->context->SendPacket(packet)) {
+        impl->failures = 0;
+    } else if (++impl->failures == Impl::kMaxFailures) {
+        LOG_ERROR(HW_GPU, "nx2 video: \"{}\" rejected {} packets in a row, skipping the rest of the "
+                          "stream", impl->name, Impl::kMaxFailures);
+    }
     impl->Receive(pictures);
 }
 
@@ -196,6 +208,7 @@ void Nx2VideoDecoder::Reset() {
     }
     impl->pending_pts.clear();
     impl->h264_packets.Reset();
+    impl->failures = 0;
 }
 
 void Nx2VideoDecoder::Render(const Nx2Picture& picture, Nx2PictureFormat format, u32 width,

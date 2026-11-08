@@ -716,6 +716,10 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     IosSupport::ConfigureAudioSession();
     SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "1024");
+    // Controllers come through Apple's GameController framework. SDL's HIDAPI layer on iOS only
+    // adds a Bluetooth LE scan for Steam Controllers that ran every few seconds for the whole
+    // session (battery, and Bluetooth prompts).
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "0");
     // Per-draw GPU and service info logging costs frame time on the phone; keep warnings.
     Settings::values.log_filter.SetValue(
         "*:Info HW.GPU:Warning Render.Vulkan:Warning Service:Warning Service.NVDRV:Error "
@@ -781,6 +785,17 @@ static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp) {
     // compile.
     Settings::values.use_docked_mode.SetValue(Settings::ConsoleMode::Handheld);
     Settings::values.use_asynchronous_shaders.SetValue(true);
+    // Memory: CPU and GPU share the app's ~6.6 GB budget (about 5.3 GB free at launch). The
+    // texture cache was allowed 5 GB before collecting (desktop tuning for Switch 2 titles), so a
+    // busy scene got the app killed by iOS without a crash report. Collect much earlier here.
+    {
+        const std::size_t avail_mib = os_proc_available_memory() >> 20;
+        const std::size_t critical = std::clamp<std::size_t>(avail_mib / 4, 1024, 2048);
+        const std::size_t expected = critical - 512;
+        setenv("EDEN_NX2_TC_CRITICAL_MIB", std::to_string(critical).c_str(), 0);
+        setenv("EDEN_NX2_TC_EXPECTED_MIB", std::to_string(expected).c_str(), 0);
+        LOG_INFO(Frontend, "iOS: texture cache limits {} / {} MiB", expected, critical);
+    }
     // iOS has no command line: run the first game in the app's Documents folder, which the user
     // fills through the Files app (UIFileSharingEnabled in Info.plist).
     if (lp.filepath.empty()) {
@@ -1238,6 +1253,14 @@ extern "C" SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             void(state->system.Pause());
             state->ios_paused_for_background = true;
         }
+        break;
+    case SDL_EVENT_LOW_MEMORY:
+        LOG_WARNING(Frontend, "iOS: low memory warning ({} MiB left to this process)",
+                    os_proc_available_memory() >> 20);
+        break;
+    case SDL_EVENT_TERMINATING:
+        LOG_INFO(Frontend, "iOS: terminating");
+        Common::Log::Stop();
         break;
     case SDL_EVENT_DID_ENTER_FOREGROUND:
         if (state->ios_paused_for_background) {
