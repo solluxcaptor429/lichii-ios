@@ -11,7 +11,5 @@
 	<!-- The guest address space is reserved as one large mapping. -->
 	<key>com.apple.developer.kernel.extended-virtual-addressing</key>
 	<true/>
-	<key>com.apple.security.app-sandbox</key>
-	<false/>
 </dict>
 </plist>

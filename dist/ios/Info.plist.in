@@ -79,5 +79,17 @@
 	<string>Bluetooth game controllers.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>DTPlatformName</key>
+	<string>iphoneos</string>
+	<key>DTPlatformVersion</key>
+	<string>26.5</string>
+	<key>DTSDKName</key>
+	<string>iphoneos26.5</string>
+	<key>DTXcode</key>
+	<string>2660</string>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>BuildMachineOSBuild</key>
+	<string>25A354</string>
 </dict>
 </plist>
