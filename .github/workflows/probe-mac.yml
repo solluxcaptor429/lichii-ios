@@ -1,5 +1,8 @@
 name: probe-mac
-on: workflow_dispatch
+on:
+  push:
+    branches: [ios]
+    paths: [.github/workflows/probe-mac.yml]
 jobs:
   probe:
     strategy:
@@ -8,7 +11,7 @@ jobs:
         image: [xcode-27, macos-26]
     runs-on: ${{ matrix.image }}
     steps:
-      - name: Disk, memory, Xcode, .NET
+      - name: Disk, memory, Xcode, .NET (rev 2)
         run: |
           sw_vers; uname -m; sysctl -n hw.memsize hw.ncpu
           df -h / /System/Volumes/Data 2>/dev/null
