@@ -575,7 +575,19 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         std::error_code ec;
         std::filesystem::create_directories(documents, ec);
         std::vector<std::filesystem::path> candidates;
-        for (const auto& entry : std::filesystem::directory_iterator(documents, ec)) {
+        // Documents and one level of subfolders (Files app copies and USB pushes both land there).
+        for (auto it = std::filesystem::recursive_directory_iterator(documents, ec);
+             it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) {
+                break;
+            }
+            const auto& entry = *it;
+            if (entry.is_directory(ec)) {
+                if (it.depth() >= 1 || entry.path().filename() == "eden") {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
             if (!entry.is_regular_file(ec)) {
                 continue;
             }
@@ -593,6 +605,10 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
             LOG_INFO(Frontend, "iOS: launching {}", lp.filepath);
         } else {
             LOG_CRITICAL(Frontend, "iOS: no game found in {}", documents.string());
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Lichii",
+                                     "No game found. Copy a .nup, .nsp or .xci into this app's folder "
+                                     "(Files app > On My iPhone > Lichii), then launch again.",
+                                     nullptr);
         }
     }
 #endif
