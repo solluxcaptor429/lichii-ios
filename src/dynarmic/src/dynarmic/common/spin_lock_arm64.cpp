@@ -5,6 +5,10 @@
 
 #include <mutex>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 #include <oaknut/code_block.hpp>
 #include <oaknut/oaknut.hpp>
 
@@ -34,6 +38,25 @@ void EmitSpinLockLock(oaknut::CodeGenerator& code, oaknut::XReg ptr) {
 void EmitSpinLockUnlock(oaknut::CodeGenerator& code, oaknut::XReg ptr) {
     code.STLR(WZR, ptr);
 }
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+
+// iOS: executable memory only exists once the JIT pool has been acquired at runtime, so the
+// lock/unlock helpers cannot be generated at static-initialisation time. Plain atomics do the
+// same job for the host-side callers (the emitted code still uses EmitSpinLock* above).
+void SpinLock::Lock() noexcept {
+    int expected = 0;
+    while (!__atomic_compare_exchange_n(&storage, &expected, 1, true, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        expected = 0;
+        __asm__ volatile("yield");
+    }
+}
+
+void SpinLock::Unlock() noexcept {
+    __atomic_store_n(&storage, 0, __ATOMIC_RELEASE);
+}
+
+#else
 
 namespace {
 
@@ -82,5 +105,7 @@ void SpinLock::Unlock() noexcept {
     std::call_once(flag, &SpinLockImpl::Initialize, impl);
     impl.unlock(&storage);
 }
+
+#endif
 
 }  // namespace Dynarmic

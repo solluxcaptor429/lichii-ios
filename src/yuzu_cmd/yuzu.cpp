@@ -77,6 +77,7 @@
 #include <vector>
 #include <os/log.h>
 #include "common/ios_jit.h"
+#include "yuzu_cmd/ios_support.h"
 #include <os/proc.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
@@ -94,21 +95,9 @@ static bool IosJitEnabled() {
     }
     return (flags & kCsDebugged) != 0;
 }
-// dynarmic: 128 MiB per guest core, four cores, plus a spare block. Acquired once, while
-// StikDebug's script is attached (iOS 26+), then the debugger is released.
-static constexpr std::size_t kIosJitPoolBytes = (5 * 128 + 16) * 1024 * 1024;
-static void IosMark(const char* what); // defined below with the other breadcrumb helpers
-static bool IosAcquireJitPool() {
-    IosMark("acquiring JIT pool");
-    std::string error;
-    if (!Common::IosJit::AcquirePool(kIosJitPoolBytes, error)) {
-        IosMark("JIT pool failed");
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "JIT memory unavailable", error.c_str(), nullptr);
-        return false;
-    }
-    IosMark("JIT pool ready");
-    return true;
-}
+// dynarmic: 128 MiB of code cache per guest core, six cores, plus spare blocks. Acquired once
+// through StikDebug's universal script (iOS 26+), then the debugger is released.
+static constexpr std::size_t kIosJitPoolBytes = (6 * 128 + 32) * 1024 * 1024;
 static std::string IosBundleIdentifier() {
     std::string out;
     if (CFStringRef id = CFBundleGetIdentifier(CFBundleGetMainBundle())) {
@@ -346,6 +335,10 @@ struct SdlState {
     // iOS: launch parameters parked until the JIT (debugged) state is on; finished in SDL_AppIterate.
     std::optional<Core::LaunchParams> pending_launch;
     Uint64 jit_wait_start{};
+    Uint64 jit_failed_at{};
+    bool jit_have_stikdebug{};
+    bool jit_url_opened{};
+    std::uint64_t jit_bg_task{};
     // Plain SDL window shown while waiting for the JIT so the screen is not just black.
     SDL_Window* wait_window{};
     SDL_Renderer* wait_renderer{};
@@ -654,22 +647,24 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     // The JIT must be on before the first guest instruction runs, or the kernel kills the process
     // with CODESIGNING "Invalid Page". Waiting here would block the main thread and trip the 10 s
     // scene-update watchdog, so park the launch and let SDL_AppIterate finish it.
-    if (!IosJitEnabled()) {
-        IOS_MARK("JIT not enabled, waiting");
-        // SideStore has no enable-JIT URL scheme and StikDebug's hangs when the target is
-        // backgrounded, so just wait: the user enables JIT by hand (SideStore > My Apps > long-press
-        // > Enable JIT, or StikDebug) and switches back.
-        LOG_WARNING(Frontend, "iOS: JIT is not enabled; waiting for it to be enabled externally");
-        state->pending_launch = std::move(lp);
-        state->jit_wait_start = SDL_GetTicks();
-        return SDL_APP_CONTINUE;
-    }
-    IOS_MARK("JIT already enabled");
-    if (!IosAcquireJitPool()) {
-        return SDL_APP_FAILURE;
-    }
-#endif
+    // dynarmic needs executable memory before the first guest instruction. On iOS 26+ (TXM)
+    // only a debugger running StikDebug's universal script can provide it, so the launch is
+    // parked while a background thread acquires the code pool; SDL_AppIterate shows progress,
+    // asks StikDebug through its URL scheme and finishes the launch once the pool is ready
+    // (blocking here would trip the 10 s scene-update watchdog).
+    const bool txm = IosSupport::HasTxm();
+    state->jit_have_stikdebug = IosSupport::CanOpenScheme("stikdebug");
+    LOG_INFO(Frontend, "iOS {}: TXM {}, debugged {}, traced {}, StikDebug {}",
+             IosSupport::MajorVersion(), txm, IosJitEnabled(), Common::IosJit::DebuggerAttached(),
+             state->jit_have_stikdebug ? "installed" : "not installed");
+    IOS_MARK(IosJitEnabled() ? "JIT enabled at launch, acquiring pool" : "JIT not enabled, waiting");
+    Common::IosJit::StartAcquire(kIosJitPoolBytes, txm);
+    state->pending_launch = std::move(lp);
+    state->jit_wait_start = SDL_GetTicks();
+    return SDL_APP_CONTINUE;
+#else
     return SDL_AppInitRest(state, std::move(lp));
+#endif
 }
 
 static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp) {
@@ -976,12 +971,13 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
     SdlState *state = (SdlState *)appstate;
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     if (state->pending_launch) {
-        if (IosJitEnabled()) {
-            LOG_INFO(Frontend, "iOS: JIT enabled after {} ms", SDL_GetTicks() - state->jit_wait_start);
-            IOS_MARK("JIT enabled");
-            if (!IosAcquireJitPool()) {
-                return SDL_APP_FAILURE;
-            }
+        using Common::IosJit::State;
+        const State jit = Common::IosJit::GetState();
+        if (jit == State::Ready) {
+            LOG_INFO(Frontend, "iOS: JIT pool ready after {} ms", SDL_GetTicks() - state->jit_wait_start);
+            IOS_MARK("JIT pool ready");
+            IosSupport::EndBackgroundTask(state->jit_bg_task);
+            state->jit_bg_task = 0;
             if (state->wait_renderer) {
                 SDL_DestroyRenderer(state->wait_renderer);
                 state->wait_renderer = nullptr;
@@ -1000,27 +996,93 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
                 state->wait_renderer = SDL_CreateRenderer(state->wait_window, nullptr);
             }
         }
+        // Hand off to StikDebug once (after the first frame, so there is something to come back
+        // to): it attaches to this PID, runs universal.js, serves the pool request and returns.
+        if (!state->jit_url_opened && state->wait_window && state->jit_have_stikdebug &&
+            jit == State::Waiting && !IosJitEnabled()) {
+            state->jit_url_opened = true;
+            std::string url = "stikdebug://enable-jit?bundle-id=" + IosBundleIdentifier() +
+                              "&pid=" + std::to_string(getpid());
+            if (IosSupport::HasTxm()) {
+                url += "&script-name=universal.js";
+            }
+            state->jit_bg_task = IosSupport::BeginBackgroundTask("lichii-jit");
+            IOS_MARK("asking StikDebug for JIT");
+            LOG_INFO(Frontend, "iOS: opening {}", url);
+            IosSupport::OpenUrl(url.c_str());
+        }
+        if (jit == State::Failed && state->jit_failed_at == 0) {
+            state->jit_failed_at = SDL_GetTicks();
+            IOS_MARK("JIT pool failed");
+            IosSupport::EndBackgroundTask(state->jit_bg_task);
+            state->jit_bg_task = 0;
+        }
         if (state->wait_renderer) {
             const Uint64 waited = (SDL_GetTicks() - state->jit_wait_start) / 1000;
+            std::vector<std::string> lines;
+            switch (jit) {
+            case State::Waiting:
+                if (state->jit_have_stikdebug) {
+                    lines = {"Requesting JIT from StikDebug...", "",
+                             "Tap \"Enable JIT\" in StikDebug if it asks;",
+                             "this screen continues by itself."};
+                } else {
+                    lines = {"Waiting for JIT...", "",
+                             "Install StikDebug 3.2 or newer, then",
+                             "enable JIT for this app (universal.js)."};
+                }
+                break;
+            case State::Acquiring:
+                lines = {"Preparing JIT memory...", "",
+                         "StikDebug is mapping " + std::to_string(kIosJitPoolBytes >> 20) + " MiB;",
+                         "this takes up to a minute."};
+                break;
+            case State::Failed: {
+                lines = {"JIT unavailable", ""};
+                std::string err = Common::IosJit::GetError();
+                while (!err.empty()) {
+                    std::size_t cut = std::min<std::size_t>(err.size(), 44);
+                    if (cut < err.size()) {
+                        const auto sp = err.rfind(' ', cut);
+                        if (sp != std::string::npos && sp > 20) {
+                            cut = sp;
+                        }
+                    }
+                    lines.push_back(err.substr(0, cut));
+                    err.erase(0, cut);
+                    while (!err.empty() && err.front() == ' ') {
+                        err.erase(0, 1);
+                    }
+                }
+                lines.push_back("");
+                lines.push_back("Closing in a moment; launch again.");
+                break;
+            }
+            case State::Ready:
+                break;
+            }
             SDL_SetRenderDrawColor(state->wait_renderer, 12, 12, 16, 255);
             SDL_RenderClear(state->wait_renderer);
             SDL_SetRenderScale(state->wait_renderer, 3.0f, 3.0f);
             SDL_SetRenderDrawColor(state->wait_renderer, 235, 235, 235, 255);
-            SDL_RenderDebugText(state->wait_renderer, 16, 40, "Waiting for JIT...");
-            SDL_RenderDebugText(state->wait_renderer, 16, 60, "SideStore > My Apps > long-press");
-            SDL_RenderDebugText(state->wait_renderer, 16, 70, "this app > Enable JIT, then return.");
-            SDL_RenderDebugText(state->wait_renderer, 16, 90, "(or StikDebug)");
-            const std::string elapsed = "waited " + std::to_string(waited) + " s / 600";
-            SDL_RenderDebugText(state->wait_renderer, 16, 110, elapsed.c_str());
+            float y = 40.0f;
+            for (const auto& line : lines) {
+                SDL_RenderDebugText(state->wait_renderer, 16, y, line.c_str());
+                y += 10.0f;
+            }
+            const std::string elapsed = "waited " + std::to_string(waited) + " s";
+            SDL_RenderDebugText(state->wait_renderer, 16, y + 10.0f, elapsed.c_str());
             SDL_SetRenderScale(state->wait_renderer, 1.0f, 1.0f);
             SDL_RenderPresent(state->wait_renderer);
         }
+        // No message boxes here: SDL's UIKit alert spins the run loop, which re-enters this
+        // callback and recursed until the stack overflowed.
+        if (jit == State::Failed && SDL_GetTicks() - state->jit_failed_at > 20 * 1000) {
+            LOG_CRITICAL(Frontend, "iOS: exiting, JIT pool failed: {}", Common::IosJit::GetError());
+            return SDL_APP_FAILURE;
+        }
         if (SDL_GetTicks() - state->jit_wait_start > 10 * 60 * 1000) {
-            LOG_CRITICAL(Frontend, "iOS: JIT still not enabled after 10 minutes");
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "JIT required",
-                                     "The JIT was not enabled. Enable it for this app in StikDebug "
-                                     "(or SideStore > JIT), then launch again.",
-                                     nullptr);
+            LOG_CRITICAL(Frontend, "iOS: JIT still not available after 10 minutes, exiting");
             return SDL_APP_FAILURE;
         }
         SDL_Delay(20);

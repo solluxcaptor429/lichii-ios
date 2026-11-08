@@ -73,6 +73,9 @@ endif()
 create_target_directory_groups(yuzu-cmd)
 
 if (IOS)
+    # UIKit helpers (StikDebug URL hand-off, background task, TXM detection).
+    enable_language(OBJCXX)
+    target_sources(yuzu-cmd PRIVATE ios_support.mm ios_support.h)
     # The SDL frontend is the iOS app: Lichii.app with the MoltenVK framework embedded.
     set_target_properties(yuzu-cmd PROPERTIES
         OUTPUT_NAME "Lichii"
