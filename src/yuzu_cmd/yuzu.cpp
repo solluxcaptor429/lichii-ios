@@ -76,6 +76,7 @@
 #include <filesystem>
 #include <vector>
 #include <os/log.h>
+#include "common/ios_jit.h"
 #include <os/proc.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
@@ -92,6 +93,20 @@ static bool IosJitEnabled() {
         return false;
     }
     return (flags & kCsDebugged) != 0;
+}
+// dynarmic: 128 MiB per guest core, four cores, plus a spare block. Acquired once, while
+// StikDebug's script is attached (iOS 26+), then the debugger is released.
+static constexpr std::size_t kIosJitPoolBytes = (5 * 128 + 16) * 1024 * 1024;
+static bool IosAcquireJitPool() {
+    IOS_MARK("acquiring JIT pool");
+    std::string error;
+    if (!Common::IosJit::AcquirePool(kIosJitPoolBytes, error)) {
+        IOS_MARK("JIT pool failed");
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "JIT memory unavailable", error.c_str(), nullptr);
+        return false;
+    }
+    IOS_MARK("JIT pool ready");
+    return true;
 }
 static std::string IosBundleIdentifier() {
     std::string out;
@@ -649,6 +664,9 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         return SDL_APP_CONTINUE;
     }
     IOS_MARK("JIT already enabled");
+    if (!IosAcquireJitPool()) {
+        return SDL_APP_FAILURE;
+    }
 #endif
     return SDL_AppInitRest(state, std::move(lp));
 }
@@ -960,6 +978,9 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
         if (IosJitEnabled()) {
             LOG_INFO(Frontend, "iOS: JIT enabled after {} ms", SDL_GetTicks() - state->jit_wait_start);
             IOS_MARK("JIT enabled");
+            if (!IosAcquireJitPool()) {
+                return SDL_APP_FAILURE;
+            }
             if (state->wait_renderer) {
                 SDL_DestroyRenderer(state->wait_renderer);
                 state->wait_renderer = nullptr;

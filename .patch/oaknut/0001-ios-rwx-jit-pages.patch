@@ -1,31 +1,51 @@
 From: Claude <noreply@anthropic.com>
-Subject: [PATCH] iOS: map the code block RWX and make protect/unprotect no-ops
+Subject: [PATCH] iOS: dual-mapped code blocks from the TXM JIT pool
 
-On iOS the debugger-enabled JIT only permits executing pages that were mapped RWX up front;
-mprotect(PROT_READ|PROT_EXEC) on written pages is refused, so the RX re-protect silently
-failed and the first jump into the dispatcher faulted (Instruction Abort, permission fault).
+On iOS 26+ (TXM) executable memory can only be granted by an attached debugger
+(StikDebug universal.js protocol). Blocks are carved from that pool: ptr() is the
+executable view, wptr() the writable alias; protect()/unprotect() are no-ops.
 ---
 --- a/include/oaknut/code_block.hpp	2026-11-07 23:15:10.362429400 -0500
-+++ b/include/oaknut/code_block.hpp	2026-11-07 23:15:10.708824000 -0500
-@@ -32,7 +32,10 @@
++++ b/include/oaknut/code_block.hpp	2026-11-08 00:21:15.599461000 -0500
+@@ -21,6 +21,10 @@
+ #    include <sys/mman.h>
+ #endif
+ 
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++extern "C" int lichii_ios_jit_alloc(std::size_t bytes, void** wmem, void** xmem);
++#endif
++
+ namespace oaknut {
+ 
+ class CodeBlock {
+@@ -32,7 +36,17 @@
          m_memory = (std::uint32_t*)VirtualAlloc(nullptr, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
  #elif defined(__APPLE__)
  #    if TARGET_OS_IPHONE
 -        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
-+        // iOS (debugger-enabled JIT, no MAP_JIT): the buffer must be mapped RWX up front; the
-+        // kernel allows that only while the process is being debugged, and a later mprotect to
-+        // add PROT_EXEC to written pages is refused, so protect()/unprotect() are no-ops here.
-+        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
++        // iOS 26+/TXM: executable memory comes from a debugger-prepared pool (see
++        // common/ios_jit.cpp). The block is dual-mapped: m_memory is the executable view, m_wmem
++        // the writable alias of the same pages. protect()/unprotect() are no-ops.
++        {
++            void* w = nullptr;
++            void* x = nullptr;
++            if (!lichii_ios_jit_alloc(size, &w, &x))
++                throw std::bad_alloc{};
++            m_memory = (std::uint32_t*)x;
++            m_wmem = (std::uint32_t*)w;
++        }
  #    else
          m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
  #    endif
-@@ -44,8 +47,15 @@
+@@ -44,12 +58,24 @@
          m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
  #endif
  
 +#if defined(_WIN32)
          if (m_memory == nullptr)
              throw std::bad_alloc{};
++#elif defined(__APPLE__) && TARGET_OS_IPHONE
++        // allocated from the pool above
 +#else
 +        if (m_memory == nullptr || m_memory == (std::uint32_t*)MAP_FAILED) {
 +            m_memory = nullptr;
@@ -35,13 +55,32 @@ failed and the first jump into the dispatcher faulted (Instruction Abort, permis
      }
  
      ~CodeBlock()
-@@ -72,18 +82,22 @@
+     {
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++        return; // pool memory lives for the process
++#endif
+         if (m_memory == nullptr)
+             return;
  
+@@ -70,20 +96,34 @@
+         return m_memory;
+     }
+ 
++    /// Writable view of the block (equal to ptr() unless the block is dual-mapped).
++    std::uint32_t* wptr() const
++    {
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++        return m_wmem;
++#else
++        return m_memory;
++#endif
++    }
++
      void protect()
      {
 -#if defined(__APPLE__) && !TARGET_OS_IPHONE
 +#if defined(__APPLE__) && TARGET_OS_IPHONE
-+        // RWX mapping, see the constructor.
++        // dual-mapped pool, nothing to toggle
 +#elif defined(__APPLE__)
          pthread_jit_write_protect_np(1);
 -#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
@@ -54,7 +93,7 @@ failed and the first jump into the dispatcher faulted (Instruction Abort, permis
      {
 -#if defined(__APPLE__) && !TARGET_OS_IPHONE
 +#if defined(__APPLE__) && TARGET_OS_IPHONE
-+        // RWX mapping, see the constructor.
++        // dual-mapped pool, nothing to toggle
 +#elif defined(__APPLE__)
          pthread_jit_write_protect_np(0);
 -#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
@@ -62,3 +101,13 @@ failed and the first jump into the dispatcher faulted (Instruction Abort, permis
          mprotect(m_memory, m_size, PROT_READ | PROT_WRITE);
  #endif
      }
+@@ -137,6 +177,9 @@
+ 
+ protected:
+     std::uint32_t* m_memory;
++    #if defined(__APPLE__) && TARGET_OS_IPHONE
++    std::uint32_t* m_wmem = nullptr;
++    #endif
+     std::size_t m_size = 0;
+ };
+ 

@@ -172,6 +172,10 @@ if(WIN32)
     target_link_libraries(common PRIVATE ntdll)
 endif()
 
+if(IOS)
+    target_sources(common PRIVATE ios_jit.cpp ios_jit.h)
+endif()
+
 if(NOT WIN32)
     target_sources(common PRIVATE signal_chain.cpp signal_chain.h)
 endif()
