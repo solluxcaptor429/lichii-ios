@@ -20,6 +20,10 @@ foreach (LIB swscale avcodec swresample avfilter avutil)
         IMPORTED_LOCATION ${FFMPEG_LIB_DIR}/lib${LIB}.a)
 endforeach()
 
+add_library(dav1d STATIC IMPORTED GLOBAL)
+set_target_properties(dav1d PROPERTIES IMPORTED_LOCATION ${FFMPEG_LIB_DIR}/libdav1d.a)
+target_link_libraries(ffmpeg INTERFACE dav1d)
+
 find_library(VIDEOTOOLBOX_FRAMEWORK VideoToolbox REQUIRED)
 find_library(COREMEDIA_FRAMEWORK CoreMedia REQUIRED)
 find_library(COREVIDEO_FRAMEWORK CoreVideo REQUIRED)

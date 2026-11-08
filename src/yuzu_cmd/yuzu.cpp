@@ -773,9 +773,9 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
 static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp) {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-    // Movies: our FFmpeg build decodes AV1 (and H.264/VP9) through VideoToolbox only, so the
-    // "GPU" NVDEC emulation path is the one that works here.
-    Settings::values.nvdec_emulation.SetValue(Settings::NvdecEmulation::Gpu);
+    // Movies: software decoding (dav1d for AV1). The VideoToolbox AV1 hwaccel failed every
+    // frame on iOS 27 and the game died as soon as the New Game movie started.
+    Settings::values.nvdec_emulation.SetValue(Settings::NvdecEmulation::Cpu);
     // Speed: a phone is a handheld (the game renders at its handheld resolution, not 4K docked),
     // and shaders build in the background instead of stalling frames (and audio) while they
     // compile.

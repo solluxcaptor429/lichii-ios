@@ -33,7 +33,7 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: 1
           HOMEBREW_NO_AUTO_UPDATE: 1
         run: |
-          brew install ninja ccache nasm glslang
+          brew install ninja ccache nasm glslang meson pkgconf
           xcodebuild -version
           cmake --version
           xcrun --sdk iphoneos --show-sdk-path
