@@ -637,19 +637,12 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     // scene-update watchdog, so park the launch and let SDL_AppIterate finish it.
     if (!IosJitEnabled()) {
         IOS_MARK("JIT not enabled, waiting");
-        // Ask whichever JIT enabler is installed: SideStore (AltStore-style scheme) first, then
-        // StikDebug. SDL_OpenURL reports whether iOS accepted the request.
-        const std::string bundle_id = IosBundleIdentifier();
-        const std::string urls[] = {"sidestore://enable-jit?bundleID=" + bundle_id,
-                                    "stikjit://enable-jit?bundle-id=" + bundle_id};
+        // SideStore has no enable-JIT URL scheme and StikDebug's hangs when the target is
+        // backgrounded, so just wait: the user enables JIT by hand (SideStore > My Apps > long-press
+        // > Enable JIT, or StikDebug) and switches back.
+        LOG_WARNING(Frontend, "iOS: JIT is not enabled; waiting for it to be enabled externally");
         state->pending_launch = std::move(lp);
         state->jit_wait_start = SDL_GetTicks();
-        for (const std::string& url : urls) {
-            LOG_WARNING(Frontend, "iOS: JIT is not enabled; asking {}", url);
-            if (SDL_OpenURL(url.c_str())) {
-                break;
-            }
-        }
         return SDL_APP_CONTINUE;
     }
     IOS_MARK("JIT already enabled");
