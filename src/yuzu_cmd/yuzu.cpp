@@ -78,6 +78,10 @@
 #include <os/log.h>
 #include "common/ios_jit.h"
 #include "yuzu_cmd/ios_support.h"
+#include "hid_core/frontend/emulated_controller.h"
+#include "hid_core/hid_core.h"
+#include "hid_core/hid_types.h"
+#include "input_common/drivers/virtual_gamepad.h"
 #include <os/proc.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
@@ -339,12 +343,96 @@ struct SdlState {
     bool jit_have_stikdebug{};
     bool jit_url_opened{};
     std::uint64_t jit_bg_task{};
+    bool ios_controllers_dirty{};
+    bool ios_paused_for_background{};
     // Plain SDL window shown while waiting for the JIT so the screen is not just black.
     SDL_Window* wait_window{};
     SDL_Renderer* wait_renderer{};
 };
 
 static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp);
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+// Touch overlay -> virtual gamepad. Player 1 (port 0) and Handheld (port 8) both listen to it,
+// so the game sees the input whichever controller style it reads.
+static InputCommon::InputSubsystem* g_ios_input = nullptr;
+static constexpr std::size_t kIosVirtualPorts[] = {0, 8};
+
+static void IosTouchButton(int button, bool pressed) {
+    if (g_ios_input == nullptr) {
+        return;
+    }
+    if (auto* pad = g_ios_input->GetVirtualGamepad()) {
+        for (const std::size_t port : kIosVirtualPorts) {
+            pad->SetButtonState(port, button, pressed);
+        }
+    }
+}
+
+static void IosTouchStick(int stick, float x, float y) {
+    if (g_ios_input == nullptr) {
+        return;
+    }
+    if (auto* pad = g_ios_input->GetVirtualGamepad()) {
+        for (const std::size_t port : kIosVirtualPorts) {
+            pad->SetStickPosition(port, stick, x, y);
+        }
+    }
+}
+
+// Maps the first physical controller (SDL: MFi, Xbox, DualSense, Switch Pro, Backbone, ...)
+// onto Player 1 and Handheld with its default layout, and shows the touch overlay only when no
+// controller is connected.
+static void IosApplyControllers(SdlState* state) {
+    auto& input = state->input_subsystem;
+    std::optional<Common::ParamPackage> pad;
+    for (const auto& device : input.GetInputDevices()) {
+        if (device.Get("engine", "") == "sdl") {
+            pad = device;
+            break;
+        }
+    }
+    if (pad) {
+        const auto buttons = input.GetButtonMappingForDevice(*pad);
+        const auto analogs = input.GetAnalogMappingForDevice(*pad);
+        for (const auto id : {Core::HID::NpadIdType::Player1, Core::HID::NpadIdType::Handheld}) {
+            auto* controller = state->system.HIDCore().GetEmulatedController(id);
+            if (controller == nullptr) {
+                continue;
+            }
+            for (const auto& [index, param] : buttons) {
+                controller->SetButtonParam(static_cast<std::size_t>(index), param);
+            }
+            for (const auto& [index, param] : analogs) {
+                controller->SetStickParam(static_cast<std::size_t>(index), param);
+            }
+        }
+        LOG_INFO(Frontend, "iOS: controller \"{}\" mapped to player 1, touch controls hidden",
+                 pad->Get("display", "gamepad"));
+    } else {
+        LOG_INFO(Frontend, "iOS: no controller connected, touch controls shown");
+    }
+    IosSupport::SetTouchControlsVisible(!pad.has_value());
+}
+
+static void IosInstallTouchControls(SdlState* state) {
+    g_ios_input = &state->input_subsystem;
+    int count = 0;
+    SDL_Window** windows = SDL_GetWindows(&count);
+    void* ui_window = nullptr;
+    if (windows != nullptr && count > 0) {
+        ui_window = SDL_GetPointerProperty(SDL_GetWindowProperties(windows[0]),
+                                           SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, nullptr);
+    }
+    SDL_free(windows);
+    if (ui_window == nullptr) {
+        LOG_ERROR(Frontend, "iOS: no UIWindow for the touch controls");
+        return;
+    }
+    IosSupport::InstallTouchControls(ui_window, &IosTouchButton, &IosTouchStick);
+    IosApplyControllers(state);
+}
+#endif
 
 constexpr int kRestartExitCode = 75;
 static std::atomic_bool restart_requested{false};
@@ -622,6 +710,22 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 #endif
     SdlConfig config{lp.config_path};
     IOS_MARK("config loaded");
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    // Audio: playback session with a 20 ms hardware buffer and a larger SDL device buffer; the
+    // default small buffer underran whenever a frame took longer than usual (audible skips).
+    IosSupport::ConfigureAudioSession();
+    SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "1024");
+    // Per-draw GPU and service info logging costs frame time on the phone; keep warnings.
+    Settings::values.log_filter.SetValue(
+        "*:Info HW.GPU:Warning Render.Vulkan:Warning Service:Warning Service.NVDRV:Error "
+        "Service.AM:Error Debug:Error");
+    {
+        Common::Log::Filter filter;
+        filter.ParseFilterString(Settings::values.log_filter.GetValue());
+        Common::Log::SetGlobalFilter(filter);
+    }
+#endif
 
     Core::ApplyLaunchParams(lp);
 
@@ -672,6 +776,11 @@ static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp) {
     // Movies: our FFmpeg build decodes AV1 (and H.264/VP9) through VideoToolbox only, so the
     // "GPU" NVDEC emulation path is the one that works here.
     Settings::values.nvdec_emulation.SetValue(Settings::NvdecEmulation::Gpu);
+    // Speed: a phone is a handheld (the game renders at its handheld resolution, not 4K docked),
+    // and shaders build in the background instead of stalling frames (and audio) while they
+    // compile.
+    Settings::values.use_docked_mode.SetValue(Settings::ConsoleMode::Handheld);
+    Settings::values.use_asynchronous_shaders.SetValue(true);
     // iOS has no command line: run the first game in the app's Documents folder, which the user
     // fills through the Files app (UIFileSharingEnabled in Info.plist).
     if (lp.filepath.empty()) {
@@ -860,6 +969,9 @@ static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp) {
 
     // don't do anything, SDL3 already exists for us :D
     state->system.RegisterExitCallback([] {});
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    IosInstallTouchControls(state);
+#endif
 
     // A game executing a program (e.g. restarting after a settings change) writes its launch state
     // to the restart handoff and quits with kRestartExitCode; the launcher boots the same file again
@@ -1092,6 +1204,12 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
         return SDL_APP_CONTINUE;
     }
 #endif
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    if (state->ios_controllers_dirty && state->emu_window) {
+        state->ios_controllers_dirty = false;
+        IosApplyControllers(state);
+    }
+#endif
     RunKeyScript(state->input_subsystem);
     if (state->emu_window) {
         state->emu_window->ApplyPendingTitle();
@@ -1103,6 +1221,35 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
 }
 extern "C" SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     SdlState *state = (SdlState *)appstate;
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    switch (event->type) {
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_JOYSTICK_ADDED:
+    case SDL_EVENT_JOYSTICK_REMOVED:
+        // The input driver handles the device in its event watch; remap on the next frame.
+        state->ios_controllers_dirty = true;
+        break;
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        // iOS forbids GPU work in the background (Metal fails the command buffers and the
+        // Vulkan scheduler aborted on the lost device): stop emulating until we are back.
+        if (state->system.IsPoweredOn() && !state->pending_launch) {
+            LOG_INFO(Frontend, "iOS: entering background, pausing");
+            void(state->system.Pause());
+            state->ios_paused_for_background = true;
+        }
+        break;
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+        if (state->ios_paused_for_background) {
+            LOG_INFO(Frontend, "iOS: back in the foreground, resuming");
+            state->ios_paused_for_background = false;
+            void(state->system.Run());
+        }
+        break;
+    default:
+        break;
+    }
+#endif
     if (state->emu_window)
         state->emu_window->OnEvent(*event);
     return SDL_APP_CONTINUE;

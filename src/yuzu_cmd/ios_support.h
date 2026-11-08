@@ -34,4 +34,21 @@ void EndBackgroundTask(std::uint64_t task);
 /// True while the app is in the foreground (active or inactive but visible).
 bool IsForeground();
 
+/// Audio: playback category (plays with the silent switch on) and a 20 ms hardware buffer.
+/// Call before SDL opens the audio device.
+void ConfigureAudioSession();
+
+/// On-screen controls. Button ids are InputCommon::VirtualGamepad::VirtualButton values, stick
+/// ids VirtualStick values; stick y is +1 at the top.
+using TouchButtonFn = void (*)(int button, bool pressed);
+using TouchStickFn = void (*)(int stick, float x, float y);
+
+/// Adds the overlay on top of the SDL window (`ui_window` is its UIWindow*). Touches outside
+/// the controls still reach the game's touch screen. Main thread only.
+void InstallTouchControls(void* ui_window, TouchButtonFn button, TouchStickFn stick);
+
+/// Shows or hides the overlay (hidden while a physical controller is connected). Releases
+/// everything held when hiding. Main thread only.
+void SetTouchControlsVisible(bool visible);
+
 } // namespace IosSupport
