@@ -78,6 +78,31 @@
 #include <os/log.h>
 #include <os/proc.h>
 #include <sys/sysctl.h>
+#include <unistd.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+// Code-signing status: dynarmic's code pages are only executable while the process is being
+// debugged (that is what StikDebug/SideStore "JIT" means on iOS 17+).
+extern "C" int csops(pid_t pid, unsigned int ops, void* useraddr, size_t usersize);
+static constexpr unsigned int kCsOpsStatus = 0;
+static constexpr int kCsDebugged = 0x10000000;
+static bool IosJitEnabled() {
+    int flags = 0;
+    if (csops(getpid(), kCsOpsStatus, &flags, sizeof(flags)) != 0) {
+        return false;
+    }
+    return (flags & kCsDebugged) != 0;
+}
+static std::string IosBundleIdentifier() {
+    std::string out;
+    if (CFStringRef id = CFBundleGetIdentifier(CFBundleGetMainBundle())) {
+        char buf[256];
+        if (CFStringGetCString(id, buf, sizeof(buf), kCFStringEncodingUTF8)) {
+            out = buf;
+        }
+    }
+    return out;
+}
 
 // Startup breadcrumbs for a device without a debugger: os_log (visible in the device syslog) and
 // Documents/lichii-startup.txt. stdout/stderr are also redirected into Documents/console.txt so the
@@ -602,6 +627,33 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     }
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
+    // The JIT must be on before the first guest instruction runs, or the kernel kills the process
+    // with CODESIGNING "Invalid Page" (seen 0.47 s after launch). Ask StikDebug through its URL
+    // scheme and wait; the app may be backgrounded while StikDebug attaches.
+    if (!IosJitEnabled()) {
+        IOS_MARK("JIT not enabled, waiting");
+        const std::string bundle_id = IosBundleIdentifier();
+        const std::string url = "stikjit://enable-jit?bundle-id=" + bundle_id;
+        LOG_WARNING(Frontend, "iOS: JIT is not enabled; opening {} and waiting up to 120 s", url);
+        SDL_OpenURL(url.c_str());
+        const Uint64 wait_start = SDL_GetTicks();
+        while (!IosJitEnabled() && SDL_GetTicks() - wait_start < 120000) {
+            SDL_PumpEvents();
+            SDL_Delay(250);
+        }
+        if (!IosJitEnabled()) {
+            LOG_CRITICAL(Frontend, "iOS: JIT still not enabled after waiting");
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "JIT required",
+                                     "The JIT was not enabled. Start this app from StikDebug "
+                                     "(or SideStore > JIT) so it can run, then try again.",
+                                     nullptr);
+            return SDL_APP_FAILURE;
+        }
+        LOG_INFO(Frontend, "iOS: JIT enabled after {} ms", SDL_GetTicks() - wait_start);
+        IOS_MARK("JIT enabled");
+    } else {
+        IOS_MARK("JIT already enabled");
+    }
     // iOS has no command line: run the first game in the app's Documents folder, which the user
     // fills through the Files app (UIFileSharingEnabled in Info.plist).
     if (lp.filepath.empty()) {

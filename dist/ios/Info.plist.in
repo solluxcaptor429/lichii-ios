@@ -77,6 +77,11 @@
 	<string>Some games use the console microphone.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Bluetooth game controllers.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>stikjit</string>
+		<string>sidestore</string>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>DTPlatformName</key>
