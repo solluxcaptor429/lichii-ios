@@ -97,15 +97,16 @@ static bool IosJitEnabled() {
 // dynarmic: 128 MiB per guest core, four cores, plus a spare block. Acquired once, while
 // StikDebug's script is attached (iOS 26+), then the debugger is released.
 static constexpr std::size_t kIosJitPoolBytes = (5 * 128 + 16) * 1024 * 1024;
+static void IosMark(const char* what); // defined below with the other breadcrumb helpers
 static bool IosAcquireJitPool() {
-    IOS_MARK("acquiring JIT pool");
+    IosMark("acquiring JIT pool");
     std::string error;
     if (!Common::IosJit::AcquirePool(kIosJitPoolBytes, error)) {
-        IOS_MARK("JIT pool failed");
+        IosMark("JIT pool failed");
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "JIT memory unavailable", error.c_str(), nullptr);
         return false;
     }
-    IOS_MARK("JIT pool ready");
+    IosMark("JIT pool ready");
     return true;
 }
 static std::string IosBundleIdentifier() {
