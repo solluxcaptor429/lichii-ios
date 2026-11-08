@@ -330,6 +330,9 @@ struct SdlState {
     // iOS: launch parameters parked until the JIT (debugged) state is on; finished in SDL_AppIterate.
     std::optional<Core::LaunchParams> pending_launch;
     Uint64 jit_wait_start{};
+    // Plain SDL window shown while waiting for the JIT so the screen is not just black.
+    SDL_Window* wait_window{};
+    SDL_Renderer* wait_renderer{};
 };
 
 static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp);
@@ -957,9 +960,38 @@ extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
         if (IosJitEnabled()) {
             LOG_INFO(Frontend, "iOS: JIT enabled after {} ms", SDL_GetTicks() - state->jit_wait_start);
             IOS_MARK("JIT enabled");
+            if (state->wait_renderer) {
+                SDL_DestroyRenderer(state->wait_renderer);
+                state->wait_renderer = nullptr;
+            }
+            if (state->wait_window) {
+                SDL_DestroyWindow(state->wait_window);
+                state->wait_window = nullptr;
+            }
             Core::LaunchParams lp = std::move(*state->pending_launch);
             state->pending_launch.reset();
             return SDL_AppInitRest(state, std::move(lp));
+        }
+        if (!state->wait_window) {
+            state->wait_window = SDL_CreateWindow("Lichii", 0, 0, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+            if (state->wait_window) {
+                state->wait_renderer = SDL_CreateRenderer(state->wait_window, nullptr);
+            }
+        }
+        if (state->wait_renderer) {
+            const Uint64 waited = (SDL_GetTicks() - state->jit_wait_start) / 1000;
+            SDL_SetRenderDrawColor(state->wait_renderer, 12, 12, 16, 255);
+            SDL_RenderClear(state->wait_renderer);
+            SDL_SetRenderScale(state->wait_renderer, 3.0f, 3.0f);
+            SDL_SetRenderDrawColor(state->wait_renderer, 235, 235, 235, 255);
+            SDL_RenderDebugText(state->wait_renderer, 16, 40, "Waiting for JIT...");
+            SDL_RenderDebugText(state->wait_renderer, 16, 60, "SideStore > My Apps > long-press");
+            SDL_RenderDebugText(state->wait_renderer, 16, 70, "this app > Enable JIT, then return.");
+            SDL_RenderDebugText(state->wait_renderer, 16, 90, "(or StikDebug)");
+            const std::string elapsed = "waited " + std::to_string(waited) + " s / 600";
+            SDL_RenderDebugText(state->wait_renderer, 16, 110, elapsed.c_str());
+            SDL_SetRenderScale(state->wait_renderer, 1.0f, 1.0f);
+            SDL_RenderPresent(state->wait_renderer);
         }
         if (SDL_GetTicks() - state->jit_wait_start > 10 * 60 * 1000) {
             LOG_CRITICAL(Frontend, "iOS: JIT still not enabled after 10 minutes");
