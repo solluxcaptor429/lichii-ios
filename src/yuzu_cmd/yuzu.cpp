@@ -327,7 +327,12 @@ struct SdlState {
     InputCommon::InputSubsystem input_subsystem{};
     std::unique_ptr<EmuWindow_SDL3> emu_window;
     bool network_initialized{};
+    // iOS: launch parameters parked until the JIT (debugged) state is on; finished in SDL_AppIterate.
+    std::optional<Core::LaunchParams> pending_launch;
+    Uint64 jit_wait_start{};
 };
+
+static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp);
 
 constexpr int kRestartExitCode = 75;
 static std::atomic_bool restart_requested{false};
@@ -628,32 +633,24 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     // The JIT must be on before the first guest instruction runs, or the kernel kills the process
-    // with CODESIGNING "Invalid Page" (seen 0.47 s after launch). Ask StikDebug through its URL
-    // scheme and wait; the app may be backgrounded while StikDebug attaches.
+    // with CODESIGNING "Invalid Page". Waiting here would block the main thread and trip the 10 s
+    // scene-update watchdog, so park the launch and let SDL_AppIterate finish it.
     if (!IosJitEnabled()) {
         IOS_MARK("JIT not enabled, waiting");
-        const std::string bundle_id = IosBundleIdentifier();
-        const std::string url = "stikjit://enable-jit?bundle-id=" + bundle_id;
-        LOG_WARNING(Frontend, "iOS: JIT is not enabled; opening {} and waiting up to 120 s", url);
+        const std::string url = "stikjit://enable-jit?bundle-id=" + IosBundleIdentifier();
+        LOG_WARNING(Frontend, "iOS: JIT is not enabled; opening {} and waiting for it", url);
+        state->pending_launch = std::move(lp);
+        state->jit_wait_start = SDL_GetTicks();
         SDL_OpenURL(url.c_str());
-        const Uint64 wait_start = SDL_GetTicks();
-        while (!IosJitEnabled() && SDL_GetTicks() - wait_start < 120000) {
-            SDL_PumpEvents();
-            SDL_Delay(250);
-        }
-        if (!IosJitEnabled()) {
-            LOG_CRITICAL(Frontend, "iOS: JIT still not enabled after waiting");
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "JIT required",
-                                     "The JIT was not enabled. Start this app from StikDebug "
-                                     "(or SideStore > JIT) so it can run, then try again.",
-                                     nullptr);
-            return SDL_APP_FAILURE;
-        }
-        LOG_INFO(Frontend, "iOS: JIT enabled after {} ms", SDL_GetTicks() - wait_start);
-        IOS_MARK("JIT enabled");
-    } else {
-        IOS_MARK("JIT already enabled");
+        return SDL_APP_CONTINUE;
     }
+    IOS_MARK("JIT already enabled");
+#endif
+    return SDL_AppInitRest(state, std::move(lp));
+}
+
+static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
     // iOS has no command line: run the first game in the app's Documents folder, which the user
     // fills through the Files app (UIFileSharingEnabled in Info.plist).
     if (lp.filepath.empty()) {
@@ -954,6 +951,27 @@ static void RunKeyScript(InputCommon::InputSubsystem& input_subsystem) {
 
 extern "C" SDL_AppResult SDL_AppIterate(void *appstate) {
     SdlState *state = (SdlState *)appstate;
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    if (state->pending_launch) {
+        if (IosJitEnabled()) {
+            LOG_INFO(Frontend, "iOS: JIT enabled after {} ms", SDL_GetTicks() - state->jit_wait_start);
+            IOS_MARK("JIT enabled");
+            Core::LaunchParams lp = std::move(*state->pending_launch);
+            state->pending_launch.reset();
+            return SDL_AppInitRest(state, std::move(lp));
+        }
+        if (SDL_GetTicks() - state->jit_wait_start > 10 * 60 * 1000) {
+            LOG_CRITICAL(Frontend, "iOS: JIT still not enabled after 10 minutes");
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "JIT required",
+                                     "The JIT was not enabled. Enable it for this app in StikDebug "
+                                     "(or SideStore > JIT), then launch again.",
+                                     nullptr);
+            return SDL_APP_FAILURE;
+        }
+        SDL_Delay(20);
+        return SDL_APP_CONTINUE;
+    }
+#endif
     RunKeyScript(state->input_subsystem);
     if (state->emu_window) {
         state->emu_window->ApplyPendingTitle();
