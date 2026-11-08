@@ -75,8 +75,45 @@
 #include <cctype>
 #include <filesystem>
 #include <vector>
+#include <os/log.h>
 #include <os/proc.h>
 #include <sys/sysctl.h>
+
+// Startup breadcrumbs for a device without a debugger: os_log (visible in the device syslog) and
+// Documents/lichii-startup.txt. stdout/stderr are also redirected into Documents/console.txt so the
+// console log backend and any printf survive an early exit.
+static std::string IosDocumentsDir() {
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : ".") + "/Documents";
+}
+static void IosMark(const char* what) {
+    os_log(OS_LOG_DEFAULT, "[lichii] %{public}s", what);
+    static FILE* marks = nullptr;
+    if (marks == nullptr) {
+        marks = std::fopen((IosDocumentsDir() + "/lichii-startup.txt").c_str(), "a");
+    }
+    if (marks != nullptr) {
+        std::fprintf(marks, "%s\n", what);
+        std::fflush(marks);
+    }
+}
+static void IosCaptureConsole() {
+    const std::string path = IosDocumentsDir() + "/console.txt";
+    std::freopen(path.c_str(), "a", stdout);
+    std::freopen(path.c_str(), "a", stderr);
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+}
+namespace {
+struct IosStaticInitMark {
+    IosStaticInitMark() {
+        IosMark("yuzu.cpp static init");
+    }
+} ios_static_init_mark;
+} // namespace
+#define IOS_MARK(what) IosMark(what)
+#else
+#define IOS_MARK(what) ((void)0)
 #endif
 
 #ifdef _WIN32
@@ -497,7 +534,12 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     // SDL calls SDL_AppIterate back to back by default, which kept a host core at 100% polling
     // input; 240 Hz is plenty for input and the key script.
     SDL_SetHint(SDL_HINT_MAIN_CALLBACK_RATE, "240");
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    IosCaptureConsole();
+    IOS_MARK("SDL_AppInit enter");
+#endif
     SdlState* state = new SdlState();
+    IOS_MARK("SdlState constructed (Core::System + input)");
     *appstate = state;
 
 #ifdef _WIN32
@@ -519,6 +561,7 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     Common::Log::Initialize();
     Common::Log::SetColorConsoleBackendEnabled(true);
     Common::Log::Start();
+    IOS_MARK("logging started");
 
     int option_index = 0;
 #ifdef _WIN32
@@ -536,6 +579,7 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     LocalFree(argv_w);
 #endif
     SdlConfig config{lp.config_path};
+    IOS_MARK("config loaded");
 
     Core::ApplyLaunchParams(lp);
 
@@ -623,7 +667,9 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         return SDL_APP_FAILURE;
     }
 
+    IOS_MARK("system.Initialize");
     state->system.Initialize();
+    IOS_MARK("system initialized");
 
 
     // Apply the command line arguments
@@ -679,7 +725,9 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         LOG_INFO(Frontend, "Restarted by the game: program index {}, {} user channel entries",
                  handoff->program_index, state->system.GetUserChannel().size());
     }
+    IOS_MARK("system.Load");
     const Core::SystemResultStatus load_result = state->system.Load(*state->emu_window, lp.filepath, load_parameters);
+    IOS_MARK("system.Load returned");
     switch (load_result) {
     case Core::SystemResultStatus::Success:
         if (restarted) {
@@ -730,6 +778,7 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     }
 
     // Core is loaded, start the GPU (makes the GPU contexts current to this thread)
+    IOS_MARK("GPU start");
     state->system.GPU().Start();
     state->system.GetCpuManager().OnGpuReady();
 
@@ -790,6 +839,7 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
         state->system.Run();
     });
 
+    IOS_MARK("system.Run");
     void(state->system.Run());
     if (state->system.DebuggerEnabled())
         state->system.InitializeDebugger();
