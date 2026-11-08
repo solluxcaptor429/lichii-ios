@@ -669,6 +669,9 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
 
 static SDL_AppResult SDL_AppInitRest(SdlState* state, Core::LaunchParams lp) {
 #if defined(__APPLE__) && TARGET_OS_IPHONE
+    // Movies: our FFmpeg build decodes AV1 (and H.264/VP9) through VideoToolbox only, so the
+    // "GPU" NVDEC emulation path is the one that works here.
+    Settings::values.nvdec_emulation.SetValue(Settings::NvdecEmulation::Gpu);
     // iOS has no command line: run the first game in the app's Documents folder, which the user
     // fills through the Files app (UIFileSharingEnabled in Info.plist).
     if (lp.filepath.empty()) {

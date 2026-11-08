@@ -181,7 +181,12 @@ endif()
 if (YUZU_USE_BUNDLED_FFMPEG)
     # Windows (MSVC and MinGW) and Linux x86_64 get the same FFmpeg with libdav1d, for Switch 2
     # titles' AV1 movies; crueter-ci's packages, used elsewhere, have no AV1 decoder.
-    if ((MSVC OR LINUX) AND CPMUTIL_AMD64)
+    if (IOS AND LICHII_FFMPEG_DIR)
+        # Own build with the native AV1 decoder + VideoToolbox hwaccel (.ci/ios/build-ffmpeg.sh):
+        # crueter-ci's iOS package has no AV1 decoder at all.
+        add_subdirectory("${LICHII_FFMPEG_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/lichii-ffmpeg")
+        set(FFmpeg_SOURCE_DIR "${LICHII_FFMPEG_DIR}")
+    elseif ((MSVC OR LINUX) AND CPMUTIL_AMD64)
         AddJsonPackage(ffmpeg-ci-av1)
     elseif (MINGW AND CPMUTIL_AMD64)
         AddJsonPackage(ffmpeg-ci-av1-mingw)

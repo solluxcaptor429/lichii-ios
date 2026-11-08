@@ -49,10 +49,25 @@ jobs:
             ios-deps-${{ hashFiles('cpmfile.json', '.github/workflows/ios.yml') }}-
             ios-deps-
 
+      - name: Cache FFmpeg (AV1 + VideoToolbox)
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-ios
+          key: ffmpeg-ios-${{ hashFiles('.ci/ios/build-ffmpeg.sh', '.ci/ios/ffmpeg-CMakeLists.txt') }}
+
+      - name: Build FFmpeg (AV1 + VideoToolbox)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          chmod +x .ci/ios/build-ffmpeg.sh
+          OUT="$PWD/ffmpeg-ios" .ci/ios/build-ffmpeg.sh
+
       - name: Configure
         run: |
           set -euo pipefail
           cmake -S . -B build -G Ninja \
+            -DLICHII_FFMPEG_DIR="$PWD/ffmpeg-ios" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
