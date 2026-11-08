@@ -1,0 +1,64 @@
+From: Claude <noreply@anthropic.com>
+Subject: [PATCH] iOS: map the code block RWX and make protect/unprotect no-ops
+
+On iOS the debugger-enabled JIT only permits executing pages that were mapped RWX up front;
+mprotect(PROT_READ|PROT_EXEC) on written pages is refused, so the RX re-protect silently
+failed and the first jump into the dispatcher faulted (Instruction Abort, permission fault).
+---
+--- a/include/oaknut/code_block.hpp	2026-11-07 23:15:10.362429400 -0500
++++ b/include/oaknut/code_block.hpp	2026-11-07 23:15:10.708824000 -0500
+@@ -32,7 +32,10 @@
+         m_memory = (std::uint32_t*)VirtualAlloc(nullptr, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+ #elif defined(__APPLE__)
+ #    if TARGET_OS_IPHONE
+-        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
++        // iOS (debugger-enabled JIT, no MAP_JIT): the buffer must be mapped RWX up front; the
++        // kernel allows that only while the process is being debugged, and a later mprotect to
++        // add PROT_EXEC to written pages is refused, so protect()/unprotect() are no-ops here.
++        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
+ #    else
+         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
+ #    endif
+@@ -44,8 +47,15 @@
+         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
+ #endif
+ 
++#if defined(_WIN32)
+         if (m_memory == nullptr)
+             throw std::bad_alloc{};
++#else
++        if (m_memory == nullptr || m_memory == (std::uint32_t*)MAP_FAILED) {
++            m_memory = nullptr;
++            throw std::bad_alloc{};
++        }
++#endif
+     }
+ 
+     ~CodeBlock()
+@@ -72,18 +82,22 @@
+ 
+     void protect()
+     {
+-#if defined(__APPLE__) && !TARGET_OS_IPHONE
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++        // RWX mapping, see the constructor.
++#elif defined(__APPLE__)
+         pthread_jit_write_protect_np(1);
+-#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
++#elif defined(__NetBSD__) || defined(__OpenBSD__)
+         mprotect(m_memory, m_size, PROT_READ | PROT_EXEC);
+ #endif
+     }
+ 
+     void unprotect()
+     {
+-#if defined(__APPLE__) && !TARGET_OS_IPHONE
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++        // RWX mapping, see the constructor.
++#elif defined(__APPLE__)
+         pthread_jit_write_protect_np(0);
+-#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
++#elif defined(__NetBSD__) || defined(__OpenBSD__)
+         mprotect(m_memory, m_size, PROT_READ | PROT_WRITE);
+ #endif
+     }
