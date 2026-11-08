@@ -75,6 +75,8 @@
 #include <cctype>
 #include <filesystem>
 #include <vector>
+#include <os/proc.h>
+#include <sys/sysctl.h>
 #endif
 
 #ifdef _WIN32
@@ -560,6 +562,14 @@ extern "C" SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv) {
     // fills through the Files app (UIFileSharingEnabled in Info.plist).
     if (lp.filepath.empty()) {
         lp.fullscreen = true;
+        // The per-process memory budget decides whether a Switch 2 title fits on this device.
+        {
+            u64 physical = 0;
+            size_t physical_size = sizeof(physical);
+            sysctlbyname("hw.memsize", &physical, &physical_size, nullptr, 0);
+            LOG_INFO(Frontend, "iOS: physical memory {} MiB, available to this process {} MiB",
+                     physical >> 20, static_cast<u64>(os_proc_available_memory()) >> 20);
+        }
         const char* home = std::getenv("HOME");
         const std::filesystem::path documents = std::filesystem::path(home ? home : ".") / "Documents";
         std::error_code ec;

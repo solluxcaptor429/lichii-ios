@@ -108,6 +108,11 @@ jobs:
           rm -rf Payload && mkdir Payload
           cp -R "$app" Payload/
           cp dist/ios/Lichii.entitlements Lichii.entitlements
+          # Ad-hoc signature carrying the entitlements: SideStore/AltStore keep an app's existing
+          # entitlements when re-signing, so JIT + memory limits survive the sideload.
+          codesign --force --sign - --entitlements dist/ios/Lichii.entitlements "$app/Frameworks/MoltenVK.framework/MoltenVK"
+          codesign --force --sign - --entitlements dist/ios/Lichii.entitlements "$app"
+          codesign -d --entitlements - "$app" 2>&1 | head -40
           /usr/bin/zip -qry Lichii.ipa Payload
           ls -la Lichii.ipa
 
