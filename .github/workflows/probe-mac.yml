@@ -1,0 +1,17 @@
+name: probe-mac
+on: workflow_dispatch
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [xcode-27, macos-26]
+    runs-on: ${{ matrix.image }}
+    steps:
+      - name: Disk, memory, Xcode, .NET
+        run: |
+          sw_vers; uname -m; sysctl -n hw.memsize hw.ncpu
+          df -h / /System/Volumes/Data 2>/dev/null
+          ls -d /Applications/Xcode*.app
+          ls /Users/runner/hostedtoolcache 2>/dev/null | head
+          dotnet --list-sdks 2>/dev/null | tail -3
